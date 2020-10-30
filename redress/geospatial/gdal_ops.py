@@ -287,16 +287,20 @@ def resample_dataset(input_ds, input_geotrans, output_ds,
     for array in (x for x in input_ds if x not in exclude):
         arr = resample_raster(input_ds[array].data,
                               input_geotrans,
-                              ref_raster,
+                              ref_raster.data,
                               output_geotrans,
                               interp_method, epsg=epsg)
+
         if add_padding:
             arr = pad(arr[1:-1, 1:-1], ((1, 1), (1, 1)),
                       mode="constant", constant_values=nan)
-        output_ds[array] = xr.DataArray(arr, dims=['x', 'y'])
+        output_ds[array] = xr.DataArray(arr, dims=['y', 'x'],
+                                        )
+        output_ds[array].assign_coords({'y': output_ds.coords['y'],
+                                        'x': output_ds.coords['x']})
 
 
-def write_xarray_dset(dataset, outpath, epsg, geotransform):
+def write_xarray_dset(dataset, outpath, epsg, geotransform, ignore=[]):
     """Write an xarray to a geotiff.
 
     Description goes here.
@@ -313,10 +317,12 @@ def write_xarray_dset(dataset, outpath, epsg, geotransform):
     # Check if all arrays in dataset have the same dimensions
     xsizes = []
     ysizes = []
+
     # Make a list of all x and y dimensions
     for array in dataset:
-        xsizes.append(dataset[array].data.shape[0])
-        ysizes.append(dataset[array].data.shape[1])
+        if array not in ignore:
+            xsizes.append(dataset[array].data.shape[0])
+            ysizes.append(dataset[array].data.shape[1])
     # Check if all elements in the list are equal
     if (not xsizes.count(xsizes[0]) == len(xsizes) or not
             ysizes.count(ysizes[0]) == len(ysizes)):
@@ -337,13 +343,14 @@ def write_xarray_dset(dataset, outpath, epsg, geotransform):
     # Iterate over each band
     bandnum = 1
     for array in dataset:
-        rasterband = raster.GetRasterBand(bandnum)
-        if bandnum == 1:
-            rasterband.SetNoDataValue(nan)
-        rasterband.SetDescription(array)
-        rasterband.WriteArray(dataset[array].data)
-        bandnum += 1
-        rasterband = None
+        if array not in ignore:
+            rasterband = raster.GetRasterBand(bandnum)
+            if bandnum == 1:
+                rasterband.SetNoDataValue(nan)
+            rasterband.SetDescription(array)
+            rasterband.WriteArray(dataset[array].compute().data)
+            bandnum += 1
+            rasterband = None
 
     # Close the output image
     raster = None

@@ -38,7 +38,7 @@ def open_product(inpath):
     return (product, geotransform)
 
 
-def image_extents(product, geotransform, step=1):
+def image_extents(product, geotransform, product_epsg, step=1):
     """Get the corner coordinates from the opened raster.
 
     Fetches a list of latitude and longitude values for the boundary
@@ -54,6 +54,10 @@ def image_extents(product, geotransform, step=1):
     :return: a list containing the boundary coordinates
     :rtype: list
     """
+    # Build the projection data
+    prj_in = Proj('epsg:%s' % product_epsg)
+    prj_out = Proj('epsg:%s' % 4326)
+    
     # Get Dem product size
     size = product.RasterXSize, product.RasterYSize
 
@@ -68,9 +72,10 @@ def image_extents(product, geotransform, step=1):
                 (py * geotransform[2])
             y = geotransform[3] + (px * geotransform[4]) +\
                 (py * geotransform[5])
-            ext.append((x, y))
+            xy_dd = transform(prj_in, prj_out, x, y)
+            ext.append((xy_dd[1], xy_dd[0]))
         yarr.reverse()
-
+    
     return ext
 
 
@@ -135,7 +140,7 @@ def extract_band(product, geotransform):
 
     # Extract band array
     arr = currentband.ReadAsArray()
-    band = xr.DataArray(arr, dims=['x', 'y'])
+    band = xr.DataArray(arr, dims=['y', 'x'])
 
     # Calculate longitude array
     indices = np.indices(arr.shape)
@@ -149,8 +154,8 @@ def extract_band(product, geotransform):
         0.5 + geotransform[3]
 
     # Set to xarray
-    band.coords['lon'] = xr.DataArray(longitude, dims=['x', 'y'])
-    band.coords['lat'] = xr.DataArray(latitude, dims=['x', 'y'])
+    band.coords['lon'] = xr.DataArray(longitude, dims=['y', 'x'])
+    band.coords['lat'] = xr.DataArray(latitude, dims=['y', 'x'])
 
     return band
 
@@ -168,7 +173,8 @@ def dem_generic(inpath, extent, epsg,):
 
     # Check if the product overlaps the extent of the file
     dem_extents = gdal_ops.build_poly_from_coords(image_extents(raw_product,
-                                                                raw_geotrans))
+                                                                raw_geotrans,
+                                                                epsg))
 
     if not gdal_ops.geom_contains(dem_extents, extent):
         raise ValueError("The chosen bounding box is not entirely inside the"

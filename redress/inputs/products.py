@@ -100,9 +100,9 @@ class Dem(object):
 
         # Convert numpy arrays to xarray
         self.bands["horizon_ele"] = xr.DataArray(eh,
-                                                 dims=['phi', 'x', 'y'])
+                                                 dims=['phi', 'y', 'x'])
         self.bands["horizon_dist"] = xr.DataArray(dh,
-                                                  dims=['phi', 'x', 'y'])
+                                                  dims=['phi', 'y', 'x'])
 
         # Set zeros back to nans
         self.bands["altitude"].where(self.bands["altitude"] == 0)
@@ -163,7 +163,7 @@ class Dem(object):
             padded_value = np.pad(value[1:-1, 1:-1], ((1, 1), (1, 1)),
                                   mode="constant")
             self.bands[key] = xr.DataArray(padded_value,
-                                           dims=['x', 'y'],
+                                           dims=['y', 'x'],
                                            coords=self.bands.coords)
 
         print("Done\n")
@@ -300,5 +300,5 @@ class Model(object):
                                                         dif_anis=False,
                                                         )
             self.toa_rad[band] = xr.DataArray(synthetic_toa_radiance,
-                                              dims=['x', 'y'],
+                                              dims=['y', 'x'],
                                               coords=self.topo_bands.coords)
