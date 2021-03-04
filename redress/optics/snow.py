@@ -7,6 +7,8 @@ This file is part of the complex_terrain algorithm
 M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 """
 import numpy as np
+import sys
+sys.path.append('/home/nheilir/REDRESS/snowoptics/')
 import snowoptics as so
 
 
@@ -42,11 +44,17 @@ def albedo_kokhanovsky(wls, sza, dd, ssa, B=1.6, g=0.845):
     alb_diff_flat_val = so.albedo_diffuse_KZ04(wls_m, ssa,
                                                impurities={'BC': 0},
                                                ni="w2008", B=B, g=g)
+                                               
+    alb_diff_flat_val= np.where(np.isnan(ssa),0.2, alb_diff_flat_val)
+    # alb_diff_flat_val= np.where(np.isnan(ssa),0.0, alb_diff_flat_val)
+    
     # Black sky albedo
     alb_dir_flat = so.albedo_direct_KZ04(wls_m, sza, ssa,
                                          impurities={'BC': 0},
                                          ni="w2008",
                                          B=B, g=g)
+    alb_dir_flat= np.where(np.isnan(ssa),0.2, alb_dir_flat)
+    # alb_dir_flat= np.where(np.isnan(ssa),0.0, alb_dir_flat)
 
     # Make the diffuse albedo the same shape as the sza for consistency
     alb_diff_flat = np.full(sza.shape, alb_diff_flat_val)
@@ -55,6 +63,8 @@ def albedo_kokhanovsky(wls, sza, dd, ssa, B=1.6, g=0.845):
     alb_kok_flat = so.albedo_KZ04(wls_m, sza, ssa, r_difftot=dd,
                                   impurities={'BC': 0},
                                   ni="w2008", B=1.6, g=0.845)
+    alb_kok_flat= np.where(np.isnan(ssa),0.2, alb_kok_flat)  
+    # alb_kok_flat= np.where(np.isnan(ssa),0.0, alb_kok_flat)                                  
 
     return (alb_dir_flat, alb_diff_flat, alb_kok_flat)
 
@@ -127,5 +137,9 @@ def brf_kokhanovsky(theta_i, theta_v, phi, wvl, SSA, b=13, M=0):
 
     # r(theta_i, theta_v, phi)
     rr = r * np.exp(-alpha * k0i * k0v / r)
+    #if ssa is nan (no snow) the brf value must be 0.2
+    rr.values= np.where(np.isnan(SSA),0.2, rr.values)
+    # rr.values= np.where(np.isnan(SSA),0.0, rr.values)    
+
 
     return rr

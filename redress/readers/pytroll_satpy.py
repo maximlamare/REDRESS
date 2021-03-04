@@ -7,13 +7,14 @@ M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 """
 import numpy as np
 from glob import glob
-from satpy import Scene
+from satpy import Scene, find_files_and_readers, available_readers
+import netCDF4
 import xarray as xr
 from pyresample import create_area_def
 from pyproj import Proj, transform
 from redress.geospatial import gdal_ops
 from redress.inputs.products import Sat
-
+import matplotlib.pyplot as plt
 
 def open_generic_product(inpath):
     """Open a satellite product.
@@ -31,7 +32,7 @@ def open_generic_product(inpath):
     fnames = glob(str(fpath_nc))
 
     # Open product and store
-    prod = Scene(filenames=fnames)
+    prod = Scene(filenames=fnames, reader='olci_l1b')
 
     return prod
 
@@ -49,7 +50,7 @@ def fetch_bandnames(product):
     return product.all_dataset_names()
 
 
-def image_extents(product, epsg=4326, native_epsg=4326):
+def image_extents(product, epsg=4326, native_epsg=4326, calibration=None):
     """Get the corner coordinates from the opened satellite image.
 
     Fetches the corner coordinates from the product in the specified
@@ -74,7 +75,8 @@ def image_extents(product, epsg=4326, native_epsg=4326):
         bandlist = fetch_bandnames(product)
         if not bandlist:
             bandlist = product.keys()
-        product.load([bandlist[0]])
+        print([bandlist[0]], calibration)
+        product.load([bandlist[0]], calibration)
         lats, lons = product[bandlist[0]].attrs[
             'area'].get_lonlats()
     except ValueError as err:
@@ -91,7 +93,8 @@ def image_extents(product, epsg=4326, native_epsg=4326):
     # Product extent
     xmin, ymin = transform(prj_in, prj_out, np.min(lats), np.min(lons))
     xmax, ymax = transform(prj_in, prj_out, np.max(lats), np.max(lons))
-
+    print(xmin, ymin,xmax, ymax)
+  
     return [(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)]
 
 
@@ -118,9 +121,11 @@ def sentinel3_olci(inpath, extent, epsg, user_list=[], resolution=300,):
     """
     # Open the image
     s3_prod = open_generic_product(inpath)
+    # Don't know how to open the following files: {'/home/nheilir/REDRESS/REDRESS_files/Entree_modele/S3A_OL_1_EFR____20180417T094642_20180417T094942_20180418T134454_0179_030_136_2160_LN1_O_NT_002.SEN3/removed_pixels.nc', '/home/nheilir/REDRESS/REDRESS_files/Entree_modele/S3A_OL_1_EFR____20180417T094642_20180417T094942_20180418T134454_0179_030_136_2160_LN1_O_NT_002.SEN3/xfdumanifest.xml', '/home/nheilir/REDRESS/REDRESS_files/Entree_modele/S3A_OL_1_EFR____20180417T094642_20180417T094942_20180418T134454_0179_030_136_2160_LN1_O_NT_002.SEN3/time_coordinates.nc', '/home/nheilir/REDRESS/REDRESS_files/Entree_modele/S3A_OL_1_EFR____20180417T094642_20180417T094942_20180418T134454_0179_030_136_2160_LN1_O_NT_002.SEN3/tie_geo_coordinates.nc', '/home/nheilir/REDRESS/REDRESS_files/Entree_modele/S3A_OL_1_EFR____20180417T094642_20180417T094942_20180418T134454_0179_030_136_2160_LN1_O_NT_002.SEN3/qualityFlags.nc'}
 
     # Check if the product overlaps the extent of the file
-    s3_extents = gdal_ops.build_poly_from_coords(image_extents(s3_prod))
+    s3_extents = gdal_ops.build_poly_from_coords(image_extents(s3_prod,
+                                                               calibration="radiance"))
     if not gdal_ops.geom_contains(s3_extents, extent):
         raise ValueError("The chosen bounding box is not entirely inside the"
                          " provided Satellite image!")
@@ -134,7 +139,11 @@ def sentinel3_olci(inpath, extent, epsg, user_list=[], resolution=300,):
             raise ValueError("Selected bands are not in product!")
 
     # Load all bands for the resampling
-    s3_prod.load(user_list)
+    for band in user_list:
+        if band.startswith("Oa"):
+            s3_prod.load([band], calibration="radiance")
+        else:
+            s3_prod.load([band])
 
     # Set parameters for the resampling stage
     image_extent = gdal_ops.corner_coords_from_poly(extent, out_epsg=2154)
@@ -157,7 +166,7 @@ def sentinel3_olci(inpath, extent, epsg, user_list=[], resolution=300,):
         # Get radiance bands
         if "Oa" in band:
             # Load radiance band
-            s3_resampled.load([band])
+            s3_resampled.load([band], calibration='radiance')
 
             # Fetch data from band
             s3_data.bands[band] = s3_resampled[band]
@@ -207,8 +216,14 @@ def sentinel3_olci(inpath, extent, epsg, user_list=[], resolution=300,):
         s3_data.meta["angles"].append(band)
 
     # Get/Set Geotransform
-    ulxy = image_extents(s3_resampled, epsg=2154)[2]
-    s3_data.geotransform = (ulxy[0], resolution, 0.0,
-                            ulxy[1], 0.0, -resolution)
+    nx = len(s3_data.bands.coords['x'])
+    ny = len(s3_data.bands.coords['y'])
+    xmin, ymin, xmax, ymax = [float(s3_data.bands.coords['x'].min().values),
+                              float(s3_data.bands.coords['y'].min().values),
+                              float(s3_data.bands.coords['x'].max().values),
+                              float(s3_data.bands.coords['y'].max().values)]
+    xres = (xmax - xmin) / float(nx)
+    yres = (ymax - ymin) / float(ny)
+    s3_data.geotransform = (xmin, xres, 0, ymax, 0, -yres)
 
     return s3_data

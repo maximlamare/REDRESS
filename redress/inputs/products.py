@@ -10,9 +10,15 @@ import numpy as np
 from scipy.ndimage import median_filter
 from redress.topography.horizon import dozier_horizon
 from redress.topography import dem_products
-from redress.optics import snow
+from redress.optics.snow import *
 from redress.topography.forward_model import Cases, iterative_radiance
-
+import redress.optics.snow_mask as sm
+from pathlib import Path
+from redress.inputs.geotiffs import import_DEM_gtiff
+from redress.geospatial.gdal_ops import (build_poly_from_geojson,
+                                                resample_dataset,
+                                                write_xarray_dset)
+from redress.inputs.satellites import import_s3OLCI
 
 class Sat(object):
     """ Satellite image class
@@ -22,16 +28,18 @@ class Sat(object):
     specified in order to import the satellite image.
      """
     def __init__(self):
-
+        
+        self.date = " "
         self.meta = {"path": None, "bandlist": [], "angles": [],
                      "wavelengths": []}
         self.bands = xr.Dataset()
         self.altitude = xr.Dataset()
         self.geotransform = None
         self.pixel_size = None
+        self.shape = None
         self.angles = xr.Dataset()
         self.topo_bands = xr.Dataset()
-
+        self.snowmask =  xr.Dataset()
 
 class Dem(object):
     """ DEM image class
@@ -45,6 +53,7 @@ class Dem(object):
         self.geotransform = None
         self.pixel_size = None
         self.angles = xr.Dataset()
+        self.geo_extent=None
 
     def compute_horizon(self, N=32):
         """Compute horizon elevation and distance.
@@ -100,9 +109,9 @@ class Dem(object):
 
         # Convert numpy arrays to xarray
         self.bands["horizon_ele"] = xr.DataArray(eh,
-                                                 dims=['phi', 'x', 'y'])
+                                                 dims=['phi', 'y', 'x'])
         self.bands["horizon_dist"] = xr.DataArray(dh,
-                                                  dims=['phi', 'x', 'y'])
+                                                  dims=['phi', 'y', 'x'])
 
         # Set zeros back to nans
         self.bands["altitude"].where(self.bands["altitude"] == 0)
@@ -163,7 +172,7 @@ class Dem(object):
             padded_value = np.pad(value[1:-1, 1:-1], ((1, 1), (1, 1)),
                                   mode="constant")
             self.bands[key] = xr.DataArray(padded_value,
-                                           dims=['x', 'y'],
+                                           dims=['y', 'x'],
                                            coords=self.bands.coords)
 
         print("Done\n")
@@ -189,7 +198,22 @@ class Model(object):
         self.albedo = {"total": [], "direct": [], "diffuse": []}
         self.case = Cases()
         self.toa_rad = xr.Dataset()
+        self.snowmask =  xr.Dataset()
+        self.EdP=[]
+        self.EhP=[]
+        self.synthetic_toa_radiance=[]
+        self.LtNA=[]
+        self.LtA =[]
+        self.T_dir_up=[]
+        self.view_ground=[]
+        self.rtild = []
+        self.r = []
+        self.a = []
+        self.rmse = []
+        self.direct_model = []
         self.geotransform = None
+        
+        
     # TODO: make a copy attributes function in class to copy attributes from other class
     def import_rt_model(self, rt_name):
         """ Import a model"""
@@ -212,7 +236,7 @@ class Model(object):
                                 "atcor": atcor})
 
     def compute_albedo(self):
-        if not self.ssa:
+        if not self.ssa.all():
             raise ValueError("The ssa of snow hasn't been set!")
 
         if not self.rt_model:
@@ -248,7 +272,7 @@ class Model(object):
             self.difftot.append(diffuse_total_ratio)
 
             # Compute albedo
-            alb_dir, alb_diff, alb_tot = snow.albedo_kokhanovsky(
+            alb_dir, alb_diff, alb_tot = albedo_kokhanovsky(
                 wvl,
                 self.angles["SZA"].data,
                 diffuse_total_ratio,
@@ -262,13 +286,13 @@ class Model(object):
         # Calculate brf factor for geometry, wavelength and ssa value
         for wvl in self.meta["wavelengths"]:
             self.brf.append((wvl,
-                             snow.brf_kokhanovsky(self.topo_bands["eff_sza"],
+                             brf_kokhanovsky(self.topo_bands["eff_sza"],
                                                   self.topo_bands["eff_vza"],
                                                   self.angles["SAA"] -
                                                   self.angles["VAA"],
                                                   wvl, self.ssa,)))
 
-    def simulate_TOA_radiance(self, casenum):
+    def simulate_TOA_radiance(self, casenum, osmd):
 
         # Compute albedo
         self.compute_albedo()
@@ -278,7 +302,13 @@ class Model(object):
 
         case = Cases()
         case.create_cases(casenum)
-
+        self.EdP=[]
+        self.EhP=[]
+        self.synthetic_toa_radiance=[]
+        self.LtNA=[]
+        self.LtA =[]
+        self.T_dir_up=[]
+        self.view_ground=[]
         for band, wvl, hdr, bhr, brf in zip(self.meta["bandlist"],
                                             self.meta["wavelengths"],
                                             self.albedo["direct"],
@@ -286,19 +316,119 @@ class Model(object):
                                             self.brf,
                                             ):
 
-            synthetic_toa_radiance = iterative_radiance(self.topo_bands,
-                                                        self.angles,
-                                                        wvl,
-                                                        hdr,
-                                                        bhr,
-                                                        self.rt_model(),
-                                                        self.rt_options,
-                                                        brf[1].data,
-                                                        case,
-                                                        tw=5,
-                                                        aw=7,
-                                                        dif_anis=False,
-                                                        )
+            synthetic_toa_radiance, LtNA, LtA, T_dir_up, view_ground, EdP, EhP,E0eff = iterative_radiance(
+                                            self.topo_bands,
+                                            self.angles,
+                                            wvl,
+                                            hdr,
+                                            bhr,
+                                            self.rt_model(),
+                                            self.rt_options,
+                                            brf[1].data,
+                                            case,                                                        
+                                            tw=5,
+                                            aw=7,
+                                            dif_anis=False,
+                                            )
             self.toa_rad[band] = xr.DataArray(synthetic_toa_radiance,
-                                              dims=['x', 'y'],
+                                              dims=['y', 'x'],
                                               coords=self.topo_bands.coords)
+
+            self.EdP.append(EdP)
+            self.EhP.append(EhP)          
+            self.synthetic_toa_radiance.append(synthetic_toa_radiance)
+            self.LtNA.append(LtNA)
+            self.LtA.append(LtA)
+            self.T_dir_up.append(T_dir_up)
+            self.view_ground.append(view_ground)
+            
+        
+        
+class SMD (object):
+    """ SMD class
+
+    This class is composed of the satellite image,dem and model.
+     """
+    def __init__(self):
+
+        self.sat = None
+        self.dem = None
+        self.model = None
+                        
+    def init_DEM(self, outfolder,infolder, strdem, strpoly ,strdemread):
+        """ initialise the objet dem in  SMD """
+        
+        # DEM path
+        dem_path = Path(infolder+strdem)
+        
+        # Provide a geojson file and build polygon
+        bbox_json = Path(infolder+strpoly)
+        geo_extent = build_poly_from_geojson(str(bbox_json))
+        
+        # import data
+        self.dem = import_DEM_gtiff(dem_path, geo_extent, epsg=2154, reader=strdemread)
+        write_xarray_dset(self.dem.bands, outfolder+strdem, 2154, self.dem.geotransform, ignore=[])
+        
+        self.dem.geo_extent=geo_extent # AVOIR
+        
+    def init_SAT(self, outfolder,infolder, date, strsat,strsatread):
+        """ initialise the objet sat in  SMD """
+        s3_path = Path(strsat)
+        self.sat = import_s3OLCI(s3_path, self.dem.geo_extent, epsg=2154, reader=strsatread)
+        self.sat.date = date 
+        write_xarray_dset(self.sat.bands, outfolder+"%s/sen.tif" %date, 2154, self.sat.geotransform, ignore=[])
+
+
+        # Resample datasets
+        resample_dataset(self.sat.angles, self.sat.geotransform, self.dem.angles, self.dem.geotransform,
+                         self.dem.bands["altitude"], "NearestNeighbor")
+    
+        write_xarray_dset(self.dem.angles, outfolder+"%s/dem2.tif" %date, 2154, self.dem.geotransform, ignore=[])
+        self.sat.shape=(self.sat.bands.sizes["y"],self.sat.bands.sizes["x"])
+        #################
+        # EITHER
+        # Open horizon file
+        saved_horizon = xr.open_dataset(infolder+"horizons_large.nc")
+        # Update the dem product
+        self.dem.bands.update(saved_horizon)
+        #################
+        # # OR
+        # # Calulate the horizon
+        # self.dem.compute_horizon()
+        
+        # # To save the horizon arrays (elevation and distance), merge them to 1 Dataset
+        # horizons = xr.merge([self.dem.bands["horizon_ele"], self.dem.bands["horizon_dist"]])
+        # #print(horizons)
+        
+        # # Save horizon file to a netcdf
+        # hor_file = Path("/home/lamarem/Documents/REDRESS/outputs/horizons.nc")
+        # hor_file ="horizons.nc"
+        # horizons.to_netcdf(hor_file)
+        
+        #  self.dem.bands.update(horizons)
+        
+        # # Close the dataset to free memory
+        # horizons = None
+        ##################
+        
+        # Compute other topobands
+        self.dem.compute_topo_bands()
+        
+        write_xarray_dset(self.dem.bands,outfolder+"dem_topo.tif", 2154, self.dem.geotransform, ignore=["horizon_ele", "horizon_dist"])
+    
+        # Resample to satellite
+        resample_dataset(self.dem.bands, self.dem.geotransform, self.sat.topo_bands,
+                         self.sat.geotransform, self.sat.bands["Oa01"],
+                         "Average",
+                         epsg=2154, exclude=["horizon_ele", "horizon_dist"],
+                         add_padding=True)
+    
+    
+        write_xarray_dset(self.sat.topo_bands, outfolder+"%s/topobands.tiff"% date, 2154, self.sat.geotransform, ignore=[])
+        write_xarray_dset(self.sat.bands,
+                          outfolder+"%s/sat_bands.tiff" % date, 2154,
+                          self.sat.geotransform)
+        write_xarray_dset(self.sat.angles,
+                          outfolder+"%s/angles.tiff" % date, 2154,
+                          self.sat.geotransform)
+        

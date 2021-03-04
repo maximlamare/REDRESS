@@ -6,6 +6,8 @@ M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 """
 import numpy as np
 from astropy.convolution import convolve
+import matplotlib.pyplot as plt
+
 
 
 class Cases:
@@ -168,6 +170,7 @@ def iterative_radiance(
                  )
 
     atmospheric_data = rt_model.outputs
+    print("atmospheric_data",atmospheric_data.solar_spectrum)
 
     rt_model.run(angles["VZA"].data.mean(),
                  angles["VAA"].data.mean(),
@@ -338,5 +341,7 @@ def iterative_radiance(
             " iteration = %s" % l_difference
         )
         i += 1
+      
+    
+    return l_toa[:, :, -1], LtNA, LtA, T_dir_up, view_ground, EdP, EhP ,Eo * cos_sza_eff
 
-    return l_toa[:, :, -1]
