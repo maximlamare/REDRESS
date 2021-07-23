@@ -89,12 +89,14 @@ def iterative_radiance(
     topo_bands,
     angles,
     wavelength,
-    hdr,
+    hdr_sun,
+    hdr_view,
     bhr,
     rt_model,
     rt_options,
     brf,
     case,
+    date,
     tw=5,
     aw=7,
     dif_anis=False,
@@ -110,7 +112,7 @@ def iterative_radiance(
     cos_sza = np.cos(angles["SZA"].data)
     cos_sza_eff = np.cos(topo_bands["eff_sza"].data)
     # Set negative values to 0
-    cos_sza_eff = np.where(cos_sza_eff < 0, 0, cos_sza_eff)
+    cos_sza_eff = np.where(cos_sza_eff < 0.000001, 0, cos_sza_eff)
 
     # Calculate the cosine of effective viewing angle
     cos_vza = np.cos(angles["VZA"].data)
@@ -165,6 +167,7 @@ def iterative_radiance(
                  refl=bhr.mean(),
                  water=rt_options["water"],
                  ozone=rt_options["ozone"],
+                 date=date,
                  atmo=rt_options["atmo_model"],
                  atcor=rt_options["atcor"],
                  )
@@ -183,6 +186,7 @@ def iterative_radiance(
                  refl=bhr.mean(),
                  water=rt_options["water"],
                  ozone=rt_options["ozone"],
+                 date=date,
                  atmo=rt_options["atmo_model"],
                  atcor=rt_options["atcor"],
                  )
@@ -220,7 +224,7 @@ def iterative_radiance(
     LtA = atmospheric_data.atmospheric_intrinsic_radiance
 
     # Atmospheric diffuse transmittance. In viewing direction
-    td = EhP_flat_thetav / (Eo * cos_vza)
+    td = EhP_flat_thetav / (Eo * cos_vza) #equation21 OK
 
     # Flat or tilted terrain options
     if case.flat_terrain:
@@ -232,7 +236,7 @@ def iterative_radiance(
         vd = 1
 
     else:  # tilted terrain
-        EdP = bb * Eo * cos_sza_eff * T_dir_dn
+        EdP = bb * Eo * cos_sza_eff * T_dir_dn  #equation4 OK
 
         # Sky view factor: with or without anisotropy of diffuse irradiance
         # at grazing angles
@@ -243,7 +247,7 @@ def iterative_radiance(
             # Account for anisotropy of diffuse irradiance at grazing
             # angles, eq. 16
             vd = bb * T_dir_dn * (cos_sza_eff / cos_sza) + (
-                1 - bb * T_dir_dn * topo_bands["vt"])
+                1 - bb * T_dir_dn * topo_bands["vt"])  #equation8 differente
 
     # Contribution of the neighbouring slopes to the satellite signal
     # Set to zero (modified in iteration for full run)
@@ -252,7 +256,7 @@ def iterative_radiance(
 
     # Direct radiation reflected by pixel to the satellite sensor
     # (eq. 2)
-    LdP = view_ground * (brf / np.pi) * EdP * T_dir_up
+    LdP = view_ground * (brf / np.pi) * EdP * T_dir_up #equation3 OK
 
     # Iterative calculation
     # Initialise the convergence and iterator
@@ -268,7 +272,7 @@ def iterative_radiance(
         # e_flat_ground = e_dir + e_diff_flat; s_atm = rho_s in Modimlab
         # R(k-1)(M)dSm = rho_e
         EtGAP = EtP_flat * ((re[:, :, i - 1] * rs) /
-                            (1 - re[:, :, i - 1] * rs))
+                            (1 - re[:, :, i - 1] * rs)) #equation16 OK
 
         # Atmospheric coupling switch
         if case.atm_coupl:
@@ -286,15 +290,15 @@ def iterative_radiance(
             # # Sirguey et al. 2011
             # Terrain reflected irradiance
             EtGP = EtP * (rt[:, :, i - 1] * shad * topo_bands["ct"]) / (
-                1 - rt[:, :, i - 1] * shad * ct_nbh)
+                1 - rt[:, :, i - 1] * shad * ct_nbh) #equation10 different
         else:
 
             EtGP = 0
 
         # Combine parts of the total diffuse irradiance incoming at the
-        # surface of the pixel, built from eq. 3 (rewritten based on grey
+        # surface of the pixel, built from eq. 7 (rewritten based on grey
         # recaps)
-        EhP = EhP_flat * vd + EtGP
+        EhP = EhP_flat * vd + EtGP #equation7 EtGAP manquant
 
         # If considering the neighbouring slopes contributions directly to
         # the satellite signal, "l_dif_dir" and "l_dif_ref_coupl_dif"
@@ -302,24 +306,40 @@ def iterative_radiance(
         if case.atm2sensor:
             # LtNA = LtGA + LtGGA + LtGAGA, eq. 23
             LtNA = (td * re[:, :, i - 1] *
-                    (EdP_flat + EhP_flat + EtGAP)) / np.pi
+                    (EdP_flat + EhP_flat + EtGAP)) / np.pi #equation20 OK
 
         # Diffuse radiation reflected by pixel to the satellite sensor
-        # Eq. 4
-        LhP = view_ground * (hdr / np.pi) * EhP * T_dir_up
+        # Eq. 4  hdr remplacer par hdr_view
+        LhP = view_ground * (hdr_view / np.pi) * EhP * T_dir_up #equation9 OK
 
         # TOA radiance (equation 1)
-        l_total = LdP + LhP + LtNA + LtA
+        l_total = LdP + LhP + LtNA + LtA #equation1 OK
 
         # Update the surface hemispherical-conical reflectance
-        r_current_dividend = np.pi * (l_total - LtNA - LtA)
-
-        r_current_divisor = T_dir_up * view_ground * (EdP + EhP)
-
+#        r_current_dividend = np.pi * (l_total -LtNA - LtA)
+#
+#        r_current_divisor = T_dir_up * view_ground * (EdP + EhP)
+#
+#        r_currentstep = np.divide(r_current_dividend, r_current_divisor,
+#                                  out=np.zeros_like(r_current_dividend),
+#                                  where=r_current_divisor != 0) #equation14 OK
+         #  hdr remplacer par hdr_sun
+#        r_current_dividend = (EdP* hdr_sun) + (EhP * bhr)
+#
+#        r_current_divisor =  (EdP + EhP)
+#
+#        r_currentstep = np.divide(r_current_dividend, r_current_divisor,
+#                                  out=np.zeros_like(r_current_dividend),
+#                                  where=r_current_divisor != 0) #equation14 OK   
+        
+        r_current_dividend = np.pi * (l_total -LtNA - LtA)
+        
+        r_current_divisor =  T_dir_up * view_ground  * (EdP + EhP)
+        d = EdP/(EdP+EhP)
+        
         r_currentstep = np.divide(r_current_dividend, r_current_divisor,
-                                  out=np.zeros_like(r_current_dividend),
-                                  where=r_current_divisor != 0)
-
+                              out=np.zeros_like(r_current_dividend),
+                              where=r_current_divisor != 0)-((1-d)*(hdr_view-bhr)+d*(brf-hdr_sun))
         # Update the reflectance stack
         r = np.dstack((r, r_currentstep))
 
@@ -343,5 +363,5 @@ def iterative_radiance(
         i += 1
       
     
-    return l_toa[:, :, -1], LtNA, LtA, T_dir_up, view_ground, EdP, EhP ,Eo * cos_sza_eff
+    return l_toa[:, :, -1], LtNA, LtA, T_dir_up, view_ground, EdP, EhP ,Eo * cos_sza_eff ,r
 

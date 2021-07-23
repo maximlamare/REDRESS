@@ -7,6 +7,7 @@ M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 import numpy as np
 import xarray as xr
 from redress.geospatial import gdal_ops
+# Import esa specific toolbox Science Toolbox Exploitation Platform
 from snappy import (ProductIO, ProductUtils, HashMap, GPF, WKTReader)
 from redress.inputs.products import Sat
 

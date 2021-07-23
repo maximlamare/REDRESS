@@ -5,14 +5,14 @@ This file is part of the complex_terrain algorithm
 M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 """
 import importlib
+import os
 import xarray as xr
 import numpy as np
 from scipy.ndimage import median_filter
 from redress.topography.horizon import dozier_horizon
 from redress.topography import dem_products
-from redress.optics.snow import *
+from redress.optics.snow import albedo_kokhanovsky, brf_kokhanovsky
 from redress.topography.forward_model import Cases, iterative_radiance
-import redress.optics.snow_mask as sm
 from pathlib import Path
 from redress.inputs.geotiffs import import_DEM_gtiff
 from redress.geospatial.gdal_ops import (build_poly_from_geojson,
@@ -40,6 +40,7 @@ class Sat(object):
         self.angles = xr.Dataset()
         self.topo_bands = xr.Dataset()
         self.snowmask =  xr.Dataset()
+        self.sat_band_np=[] #temporaire
 
 class Dem(object):
     """ DEM image class
@@ -138,18 +139,30 @@ class Dem(object):
         topo_prods["slope"], topo_prods["aspect"] = dem_products.horneslope(
             self.bands["altitude"].data, self.pixel_size)
 
+        #BEGIN FRANCOIS FIX BUG
         # Calculate effective sza
+#        print("Calculating Effective Solar and Viewing Angles\n")
+#        topo_prods["eff_sza"] = dem_products.effective_zenith_angle(
+#            self.angles["SZA"],
+#            self.angles["SAA"],
+#            topo_prods["slope"], topo_prods["aspect"])
+#
+#        # Calculate effective oza
+#        topo_prods["eff_vza"] = dem_products.effective_zenith_angle(
+#            self.angles["VZA"], self.angles["VAA"],
+#            topo_prods["slope"], topo_prods["aspect"])
+        
+        
         print("Calculating Effective Solar and Viewing Angles\n")
-        topo_prods["eff_sza"] = dem_products.effective_zenith_angle(
-            self.angles["SZA"],
-            self.angles["SAA"],
-            topo_prods["slope"], topo_prods["aspect"])
-
-        # Calculate effective oza
-        topo_prods["eff_vza"] = dem_products.effective_zenith_angle(
-            self.angles["VZA"], self.angles["VAA"],
-            topo_prods["slope"], topo_prods["aspect"])
-
+        topo_prods["eff_sza"],topo_prods["eff_vza"],topo_prods["eff_raa"] = \
+            dem_products.effective_viewing_angles(
+                self.angles["SZA"],
+                self.angles["SAA"],
+                self.angles["VZA"],
+                self.angles["VAA"],
+                topo_prods["slope"], topo_prods["aspect"])
+        #END FRANCOIS FIX BUG
+        
         # Compute skyview and terrain configuration factors
         print("Calculating Skyview Factor\n")
         topo_prods["vt"], topo_prods["ct"] = dem_products.skyview(
@@ -186,7 +199,7 @@ class Model(object):
     specified in order to import the satellite image.
      """
     def __init__(self):
-
+        self.date = " "
         self.ssa = None
         self.angles = None
         self.dem = None
@@ -195,7 +208,7 @@ class Model(object):
         self.rt_options = {}
         self.difftot = []
         self.brf = []
-        self.albedo = {"total": [], "direct": [], "diffuse": []}
+        self.albedo = {"total": [], "direct_sun": [], "direct_view": [], "diffuse": []}
         self.case = Cases()
         self.toa_rad = xr.Dataset()
         self.snowmask =  xr.Dataset()
@@ -212,6 +225,10 @@ class Model(object):
         self.rmse = []
         self.direct_model = []
         self.geotransform = None
+        self.hdr_sun = []
+        self.hdr_view = []
+        self.bhr = []
+        self.brfnp = []
         
         
     # TODO: make a copy attributes function in class to copy attributes from other class
@@ -261,6 +278,7 @@ class Model(object):
                    refl=self.rt_options["refl"],
                    water=self.rt_options["water"],
                    ozone=self.rt_options["ozone"],
+                   date=self.date,
                    atmo=self.rt_options["atmo_model"],
                    atcor=self.rt_options["atcor"],
                    )
@@ -272,26 +290,36 @@ class Model(object):
             self.difftot.append(diffuse_total_ratio)
 
             # Compute albedo
-            alb_dir, alb_diff, alb_tot = albedo_kokhanovsky(
+            alb_dir_sun, alb_dir_view, alb_diff, alb_tot = albedo_kokhanovsky(
                 wvl,
-                self.angles["SZA"].data,
+                self.angles["SZA"],
+                self.topo_bands["eff_sza"],
+                self.topo_bands["eff_vza"],
                 diffuse_total_ratio,
                 self.ssa,
                 B=1.6, g=0.845)
-            self.albedo["direct"].append(alb_dir)
+            self.albedo["direct_sun"].append(alb_dir_sun)
+            self.albedo["direct_view"].append(alb_dir_view)
             self.albedo["diffuse"].append(alb_diff)
             self.albedo["total"].append(alb_tot)
 
     def compute_brf(self):
+##################### FIXBUG FRANCOIS
+
         # Calculate brf factor for geometry, wavelength and ssa value
         for wvl in self.meta["wavelengths"]:
+#            self.brf.append((wvl,
+#                             brf_kokhanovsky(self.topo_bands["eff_sza"],
+#                                                  self.topo_bands["eff_vza"],
+#                                                  self.angles["SAA"] -
+#                                                  self.angles["VAA"],
+#                                                  wvl, self.ssa,)))
             self.brf.append((wvl,
-                             brf_kokhanovsky(self.topo_bands["eff_sza"],
-                                                  self.topo_bands["eff_vza"],
-                                                  self.angles["SAA"] -
-                                                  self.angles["VAA"],
-                                                  wvl, self.ssa,)))
-
+                 brf_kokhanovsky(self.topo_bands["eff_sza"],
+                                      self.topo_bands["eff_vza"],
+                                      self.topo_bands["eff_raa"],
+                                      wvl, self.ssa,)))    
+#####################END FIXBUG FRANCOIS
     def simulate_TOA_radiance(self, casenum, osmd):
 
         # Compute albedo
@@ -303,29 +331,33 @@ class Model(object):
         case = Cases()
         case.create_cases(casenum)
         self.EdP=[]
+        self.r=[]
         self.EhP=[]
         self.synthetic_toa_radiance=[]
         self.LtNA=[]
         self.LtA =[]
         self.T_dir_up=[]
         self.view_ground=[]
-        for band, wvl, hdr, bhr, brf in zip(self.meta["bandlist"],
+        for band, wvl, hdr_sun,  hdr_view, bhr, brf in zip(self.meta["bandlist"],
                                             self.meta["wavelengths"],
-                                            self.albedo["direct"],
+                                            self.albedo["direct_sun"],
+                                            self.albedo["direct_view"],
                                             self.albedo["diffuse"],
                                             self.brf,
                                             ):
 
-            synthetic_toa_radiance, LtNA, LtA, T_dir_up, view_ground, EdP, EhP,E0eff = iterative_radiance(
+            synthetic_toa_radiance, LtNA, LtA, T_dir_up, view_ground, EdP, EhP,E0eff,r = iterative_radiance(
                                             self.topo_bands,
                                             self.angles,
                                             wvl,
-                                            hdr,
+                                            hdr_sun,  
+                                            hdr_view,
                                             bhr,
                                             self.rt_model(),
                                             self.rt_options,
                                             brf[1].data,
-                                            case,                                                        
+                                            case,
+                                            self.date,                                                        
                                             tw=5,
                                             aw=7,
                                             dif_anis=False,
@@ -341,6 +373,11 @@ class Model(object):
             self.LtA.append(LtA)
             self.T_dir_up.append(T_dir_up)
             self.view_ground.append(view_ground)
+            self.hdr_sun.append(hdr_sun)
+            self.hdr_view.append(hdr_view)
+            self.bhr.append(bhr)
+            self.brfnp.append(brf[1].data)
+            
             
         
         
@@ -376,6 +413,8 @@ class SMD (object):
         s3_path = Path(strsat)
         self.sat = import_s3OLCI(s3_path, self.dem.geo_extent, epsg=2154, reader=strsatread)
         self.sat.date = date 
+        if os.path.exists(outfolder+"%s/sen.tif"):
+            os.remove(outfolder+"%s/sen.tif")
         write_xarray_dset(self.sat.bands, outfolder+"%s/sen.tif" %date, 2154, self.sat.geotransform, ignore=[])
 
 
@@ -388,27 +427,27 @@ class SMD (object):
         #################
         # EITHER
         # Open horizon file
-        saved_horizon = xr.open_dataset(infolder+"horizons_large.nc")
+        saved_horizon = xr.open_dataset(infolder+"horizons_compute.nc")
         # Update the dem product
         self.dem.bands.update(saved_horizon)
         #################
-        # # OR
-        # # Calulate the horizon
-        # self.dem.compute_horizon()
-        
-        # # To save the horizon arrays (elevation and distance), merge them to 1 Dataset
-        # horizons = xr.merge([self.dem.bands["horizon_ele"], self.dem.bands["horizon_dist"]])
-        # #print(horizons)
-        
-        # # Save horizon file to a netcdf
-        # hor_file = Path("/home/lamarem/Documents/REDRESS/outputs/horizons.nc")
-        # hor_file ="horizons.nc"
-        # horizons.to_netcdf(hor_file)
-        
-        #  self.dem.bands.update(horizons)
-        
-        # # Close the dataset to free memory
-        # horizons = None
+#        # OR
+#        # Calulate the horizon
+#        self.dem.compute_horizon()
+#        
+#        # To save the horizon arrays (elevation and distance), merge them to 1 Dataset
+#        horizons = xr.merge([self.dem.bands["horizon_ele"], self.dem.bands["horizon_dist"]])
+#        #print(horizons)
+#        
+#        # Save horizon file to a netcdf
+##        hor_file = Path("/home/lamarem/Documents/REDRESS/outputs/horizons.nc")
+#        hor_file =infolder+"horizons_compute.nc"
+#        horizons.to_netcdf(hor_file)
+#        
+#        self.dem.bands.update(horizons)
+#        
+#        # Close the dataset to free memory
+#        horizons = None
         ##################
         
         # Compute other topobands

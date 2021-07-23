@@ -15,7 +15,8 @@ class rtmodel(object):
         self.outputs = None
 
     def run(self, sza, saa, vza, vaa, wvl, alt, aero,
-            aod=0.1, refl=0.99, water=0.05, ozone=0.30, atmo=None, atcor=False,
+            aod=0.1, refl=0.99, water=0.05, ozone=0.30, 
+            date=' ',atmo=None, atcor=False,
             ):
         """ Run PY6S
         date = datetime object specifying the day and month of acquisition
@@ -52,9 +53,9 @@ class rtmodel(object):
         s.geometry.view_z = np.rad2deg(vza)
         s.geometry.solar_a = np.rad2deg(saa)
         s.geometry.view_a = np.rad2deg(vaa)
-
-        # s.geometry.day = date.day
-        # s.geometry.month = date.month
+        
+        s.geometry.day =int(date[6:8])
+        s.geometry.month = int(date[4:6])
 
         # Set altitudes
         s.altitudes = ps.Altitudes()

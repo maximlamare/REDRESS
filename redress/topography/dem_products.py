@@ -214,3 +214,60 @@ def effective_zenith_angle(zenith, azimuth, slp, asp):
         np.cos(azimuth - asp)
 
     return np.arccos(mu)
+
+def effective_viewing_angles(SZA, SAA, VZA, VAA, slope, aspect):
+    """compute the effective viewing angle of incident and observer  as well as the relative azimuth 
+    angle between incident and observer for a given slope according to dumont et al.2011
+    
+    :param SZA: Solar zenith angle (radians)
+    :param SAA: Solar azimuth angle (radians)
+    :param VZA: viewing zenith angle (radians)
+    :param VAA: viewing azimuth angle (radians)
+    :param slope: Slope inclination (radians)
+    :param aspect: Slope aspect (radians)    
+    """
+    # Local incident zenith angle
+    mu_i = np.cos(SZA) * np.cos(slope) + np.sin(SZA) * \
+        np.sin(slope) * np.cos(SAA - aspect)
+#    if mu_i < 0.000001:  # Illumination rasante, instable, voir comment adapter à REDRESS
+#        mu_i = np.nan
+
+#    mu_i = np.where(mu_i < 0.000001, np.nan, mu_i) 
+#To reproduce in Ipython 
+# topo_prods = {}   
+#from redress.topography import dem_products    
+#topo_prods["slope"], topo_prods["aspect"] = dem_products.horneslope(
+#   osmd.dem.bands["altitude"].data, osmd.dem.pixel_size)
+#mu_i = np.cos(osmd.dem.angles["SZA"]) * np.cos(topo_prods["slope"]) + np.sin(osmd.dem.angles["SZA"]) * \
+#   np.sin(topo_prods["slope"]) * np.cos(osmd.dem.angles["SAA"] -topo_prods["aspect"] )
+#fig1,(ax01)=plt.subplots(1,1)
+#c=ax01.imshow(mu_i)
+#ax01.set_title("mu_i")
+#fig1.colorbar(c,ax=ax01)
+#fig1,(ax01)=plt.subplots(1,1)
+#c=ax01.imshow(np.where(mu_i < 10**-6, np.nan, mu_i))
+#ax01.set_title("mu_i")
+#fig1.colorbar(c,ax=ax01)
+    
+    # Local viewing zenith angle
+    mu_v = np.cos(VZA) * np.cos(slope) + np.sin(VZA) * \
+        np.sin(slope) * np.cos(VAA - aspect)
+
+    SZA_eff = np.arccos(mu_i)
+    VZA_eff = np.arccos(mu_v)
+    # Remove part of the polar representation that correspond to an observer behind the slope, probably already done in REDRESS
+    VZA_eff = np.where(VZA_eff > np.radians(90), np.nan, VZA_eff)
+    # Local relative azimuth angle (dumont et al.2011)
+    mu_az_numerator = (np.cos(VZA) * np.cos(SZA) +
+                       np.sin(VZA) * np.sin(SZA) * np.cos(VAA-SAA)
+                       - mu_i * mu_v)
+    mu_az_denominator = np.sin(SZA_eff) * np.sin(VZA_eff)
+    # When illumination or observator is at nadir (in the new referential), set RAA to zero
+    mu_az = np.where(mu_az_denominator != 0, np.divide(
+        mu_az_numerator, mu_az_denominator), 0)
+
+    # Garde fou qui prévient d'instabilités numérique autour de -1 et 1
+    np.clip(mu_az, -1, 1, out=mu_az)
+    #Relative Azimuth Angle effectif
+    RAA_eff = np.arccos(mu_az)
+    return SZA_eff, VZA_eff, RAA_eff

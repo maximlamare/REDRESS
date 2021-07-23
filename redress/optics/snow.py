@@ -12,7 +12,7 @@ sys.path.append('/home/nheilir/REDRESS/snowoptics/')
 import snowoptics as so
 
 
-def albedo_kokhanovsky(wls, sza, dd, ssa, B=1.6, g=0.845):
+def albedo_kokhanovsky(wls, sza, eff_sza, eff_vza, dd, ssa, B=1.6, g=0.845):
     """Calculate black sky, white sky and blue sky albedo.
 
     Using the Asymptotic Radiative Transfer theory from Kokhanovsky and Zege,
@@ -49,12 +49,23 @@ def albedo_kokhanovsky(wls, sza, dd, ssa, B=1.6, g=0.845):
     # alb_diff_flat_val= np.where(np.isnan(ssa),0.0, alb_diff_flat_val)
     
     # Black sky albedo
-    alb_dir_flat = so.albedo_direct_KZ04(wls_m, sza, ssa,
+#    alb_dir_flat = so.albedo_direct_KZ04(wls_m, sza, ssa,
+#                                         impurities={'BC': 0},
+#                                         ni="w2008",
+#                                         B=B, g=g)
+#    alb_dir_flat= np.where(np.isnan(ssa),0.2, alb_dir_flat)
+#    # alb_dir_flat= np.where(np.isnan(ssa),0.0, alb_dir_flat)
+    alb_dir_sun = so.albedo_direct_KZ04(wls_m, eff_sza, ssa,
                                          impurities={'BC': 0},
                                          ni="w2008",
                                          B=B, g=g)
-    alb_dir_flat= np.where(np.isnan(ssa),0.2, alb_dir_flat)
-    # alb_dir_flat= np.where(np.isnan(ssa),0.0, alb_dir_flat)
+    alb_dir_sun= np.where(np.isnan(ssa),0.2, alb_dir_sun)
+    
+    alb_dir_view = so.albedo_direct_KZ04(wls_m, eff_vza, ssa,
+                                         impurities={'BC': 0},
+                                         ni="w2008",
+                                         B=B, g=g)
+    alb_dir_view= np.where(np.isnan(ssa),0.2, alb_dir_view)
 
     # Make the diffuse albedo the same shape as the sza for consistency
     alb_diff_flat = np.full(sza.shape, alb_diff_flat_val)
@@ -66,7 +77,7 @@ def albedo_kokhanovsky(wls, sza, dd, ssa, B=1.6, g=0.845):
     alb_kok_flat= np.where(np.isnan(ssa),0.2, alb_kok_flat)  
     # alb_kok_flat= np.where(np.isnan(ssa),0.0, alb_kok_flat)                                  
 
-    return (alb_dir_flat, alb_diff_flat, alb_kok_flat)
+    return (alb_dir_sun, alb_dir_view, alb_diff_flat, alb_kok_flat)
 
 
 def brf_kokhanovsky(theta_i, theta_v, phi, wvl, SSA, b=13, M=0):
@@ -94,32 +105,41 @@ def brf_kokhanovsky(theta_i, theta_v, phi, wvl, SSA, b=13, M=0):
     :rtype: ndarray
     """
     wvl_m = wvl * 1e-9
-
-    def brf0(theta_i, theta_v, phi):
+    
+    def brf0(theta_i, theta_v, phi,RAA_formulation="angular"):
         """Calculate the r0 of the BRF.
-
         See brf function for details.
-
         :param theta_i: illumination zenith angle
         :type theta_i: float
         :param theta_v: viewing zenith angle
         :type theta_v: float
         :param phi: relative azimuth angle (illumination - viewing)
         :type phi: float
+        :param RAA_formulation: angular (the glint region is at 180°) or vectorial (the glint region is at 0°, as in Kokhanovsky paper)
+        :type RAA_formulation: string
         :return: r0
         :rtype: float
         """
+        if RAA_formulation == "angular":
+            new_phi = np.pi-phi
+        elif RAA_formulation == "vectorial":
+            new_phi = phi
+        else:
+            raise ValueError("Invalid RAA_formulation in brf0")
+        
+        
         theta = np.arccos(-np.cos(theta_i) * np.cos(theta_v) + np.sin(theta_i)
-                          * np.sin(theta_v) * np.cos(phi)) * 180. / np.pi
+                          * np.sin(theta_v) * np.cos(new_phi)) * 180. / np.pi
         phase = 11.1 * np.exp(-0.087 * theta) + 1.1 * np.exp(-0.014 * theta)
         rr = 1.247 + 1.186 * (np.cos(theta_i) + np.cos(theta_v)) + 5.157 * (
             np.cos(theta_i) * np.cos(theta_v)) + phase
         rr = rr / (4 * (np.cos(theta_i) + np.cos(theta_v)))
 
         return rr
-
+#########################" FIXBUG FRANCOIS
     # r0 in kokhanovsky's paper
-    r = brf0(theta_i, theta_v, phi)
+    r = brf0(theta_i, theta_v, phi,RAA_formulation="angular") #After fixBug
+#    r = brf0(theta_i, theta_v, phi,RAA_formulation="vectorial") #Before fixBug
 
     # k0 for theta_v and theta i
     k0v = 3. / 7. * (1. + 2. * np.cos(theta_v))

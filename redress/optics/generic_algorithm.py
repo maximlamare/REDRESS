@@ -58,7 +58,7 @@ def ssa_estimate(osmd, mask=None, model="2-param"):
         first_guess = [1.0, 0.0, 40.]   
         params_guess=np.zeros((osmd.sat.shape[0],osmd.sat.shape[1],3))
     
-    dirdiff_ratio=np.array([a/(a+b) for a,b in zip(osmd.model.EdP,osmd.model.EhP)])
+    dirdiff_ratio=np.array([b/(a+b) for a,b in zip(osmd.model.EdP,osmd.model.EhP)])
     if mask==None :
         wls = np.array(osmd.sat.meta["wavelengths"])
         ddr = np.array(dirdiff_ratio)
@@ -116,26 +116,33 @@ def refl_estimate(osmd):
     
     r_current_dividend = np.pi * (np.array(osmd.model.synthetic_toa_radiance) - np.array(osmd.model.LtNA) - np.array(osmd.model.LtA)[:,None,None])
     
-    r_current_divisor = np.array(osmd.model.T_dir_up) * np.array(osmd.model.view_ground) * (np.array(osmd.model.EdP)+ np.array(osmd.model.EhP))
-    
+    r_current_divisor = np.array(osmd.model.T_dir_up)  * (np.array(osmd.model.EdP)+ np.array(osmd.model.EhP))
+    d = np.array(osmd.model.EdP)/(np.array(osmd.model.EdP)+np.array(osmd.model.EhP))
+
+#    r_current_dividend = (osmd.model.EdP* osmd.model.albedo["direct"]) + (osmd.model.EhP * osmd.model.albedo["diffuse"])
+#    
+#    r_current_divisor =  (osmd.model.EdP + osmd.model.EhP)
     osmd.model.r = np.divide(r_current_dividend, r_current_divisor,
                               out=np.zeros_like(r_current_dividend),
-                              where=r_current_divisor != 0)
+                              where=r_current_divisor != 0)-((1-d)*(np.array(osmd.model.hdr_view)-np.array(osmd.model.bhr))+
+                                                             (d*(np.array(osmd.model.brfnp)-np.array(osmd.model.hdr_sun))))
 
         
 def obs(osmd):
 
-    sat_bands=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
-    for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
-        sat_bands[index,:,:]= osmd.sat.bands[band].values
+#    sat_bands=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
+#    for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
+#        sat_bands[index,:,:]= osmd.sat.bands[band].values
+
+    r_current_dividend = np.pi * (osmd.sat.sat_band_np - np.array(osmd.model.LtNA) - np.array(osmd.model.LtA)[:,None,None])
     
-    r_current_dividend = np.pi * (sat_bands - np.array(osmd.model.LtNA) - np.array(osmd.model.LtA)[:,None,None])
+    r_current_divisor = np.array(osmd.model.T_dir_up) * (np.array(osmd.model.EdP) + np.array(osmd.model.EhP))
     
-    r_current_divisor = np.array(osmd.model.T_dir_up) * np.array(osmd.model.view_ground) * (np.array(osmd.model.EdP) + np.array(osmd.model.EhP))
-     
+    d = np.array(osmd.model.EdP)/(np.array(osmd.model.EdP)+np.array(osmd.model.EhP))
     
     osmd.model.rtild = np.divide(r_current_dividend, r_current_divisor,
                               out=np.zeros_like(r_current_dividend),
-                              where=r_current_divisor != 0)
+                              where=r_current_divisor != 0) -((1-d)*(np.array(osmd.model.hdr_view)-np.array(osmd.model.bhr))+
+                                                             (d*(np.array(osmd.model.brfnp)-np.array(osmd.model.hdr_sun))))
 
         
