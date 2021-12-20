@@ -57,7 +57,7 @@ class Cases:
             self.terrain_contribution = False
             self.atm_coupl = False
         elif case_number == 2:
-            # Case 3: tilted terrain, no terrain contribution
+            # Case 2: tilted terrain, no terrain contribution
             self.flat_terrain = False
             self.atm2sensor = False
             self.terrain_contribution = False
@@ -173,8 +173,7 @@ def iterative_radiance(
                  )
 
     atmospheric_data = rt_model.outputs
-    print("atmospheric_data",atmospheric_data.solar_spectrum)
-
+    
     rt_model.run(angles["VZA"].data.mean(),
                  angles["VAA"].data.mean(),
                  angles["SZA"].data.mean(),

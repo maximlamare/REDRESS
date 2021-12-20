@@ -7,8 +7,8 @@ Created on Wed Sep 11 08:01:03 2019
 """
 from osgeo import gdal
 from pathlib import Path
-import cartopy.crs as ccrs
-from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
+#import cartopy.crs as ccrs
+#from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import MultipleLocator
@@ -37,7 +37,7 @@ def plot_fig3(satprod, modelprod, snowmask, band, pos, basedir,date, typesimu,
     # print (satb)
     # print (ctb)
     print(snowmask)
-    snowmask = snowmask['altitude']#[rmin:rmax,cmin:cmax]
+    snowmask = snowmask['isSnow']#[rmin:rmax,cmin:cmax]
     print(rmin,rmax, cmin,cmax)
     masked_satb = np.ma.masked_where(snowmask <= cutoff, satb, np.nan)
     masked_ctb = np.ma.masked_where(snowmask <= cutoff, ctb, np.nan)
@@ -95,8 +95,12 @@ def plot_fig3(satprod, modelprod, snowmask, band, pos, basedir,date, typesimu,
     #             masked_ctb[snowmask < 0.5],
     #               color="green",
     #             s=16, marker='.', alpha=0.4)
-    ax1.scatter(masked_satb[snowmask !=1],
-                masked_ctb[snowmask !=1],
+#    ax1.scatter(masked_satb[snowmask !=1],
+#                masked_ctb[snowmask !=1],
+#                  color="green",
+#                s=16, marker='.', alpha=0.4)
+    ax1.scatter(masked_satb,
+                masked_ctb,
                   color="green",
                 s=16, marker='.', alpha=0.4)
 
@@ -179,11 +183,11 @@ def plot_fig3(satprod, modelprod, snowmask, band, pos, basedir,date, typesimu,
     
 
     
-dates=["20180213", "20180221", "20180314", "20180322", "20180406","20180417"]
+dates=["20180213", "20180221", "20180316", "20180321", "20180406","20180417"]
 date = "20180213"
 for date in dates:
     # Specify data dir
-    basedir = Path("/home/nheilir/REDRESS/REDRESS_files/outputs_iteration")#"/reflectance02/")
+    basedir = Path("/home/nheilir/REDRESS/REDRESS_files/outputs/outputs_Case5")#"/reflectance02/")
     cases, sats = open_sat_model(basedir.joinpath(date))
     angles, ds_angles = getdata(basedir.joinpath("%s/angles.tiff" %date))
     topobands, ds_topo = getdata(basedir.joinpath("%s/topobands.tiff" %date))
@@ -200,17 +204,17 @@ for date in dates:
     pos = {}
     for crd in coords:
         pos.update({crd[0]: transpt(sats['geotrans'], crd)[1:3]})
-    simucase = ["FullSnow","MaskSnow"]
+    simucase = ["_","_"]
     # plot_fig3(sats['sat_bands'],cases['toa_level_FullSnow'],snowmask2,
     #               "Oa05", pos,  basedir, date, simucase[0], [0, 600], [-340, 340, 260], "Band 05: 510 nm (Full snow)")
     
     # plot_fig3(sats['sat_bands'], cases['toa_level_FullSnow'],snowmask2,
     #               "Oa21", pos,  basedir, date , simucase[0], [0, 160], [-160, 160, 200], "Band 21: 1020nm (Full snow)")
     
-    plot_fig3(sats['sat_bands'],cases['toa_level_MaskSnow'],snowmask2,
+    plot_fig3(sats['sat_bands'],cases['toa_level'],snowmask2,
                   "Oa05", pos, basedir, date , simucase[1], [0, 600], [-340, 340, 260], "Band 05: 510 nm (Mask snow)")
     
-    plot_fig3(sats['sat_bands'], cases['toa_level_MaskSnow'],snowmask2,
+    plot_fig3(sats['sat_bands'], cases['toa_level'],snowmask2,
                   "Oa21", pos,  basedir, date, simucase[1], [0, 160], [-160, 160, 200], "Band 21: 1020nm (Mask snow)")
     
 

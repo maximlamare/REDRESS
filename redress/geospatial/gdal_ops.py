@@ -42,7 +42,6 @@ def build_poly_from_coords(coord_list):
 
     # Assign projection to geometry
     poly.AssignSpatialReference(out_srs)
-
     return poly
 
 
@@ -147,6 +146,98 @@ def geom_contains(master_geom, slave_geom):
 
     return within
 
+def resample_raster_diffgeo(in_dataset,out_dataset, interp_method, epsg_to=2154, epsg_from=32631):
+    """Resample a raster to match another raster's grid different espg and resolution.
+
+    Use GDAL to "collocate" a "slave" raster to a "master", using the rasters'
+     spatial information.
+
+    :param slave_raster: data to be regridded
+    :type slave_raster: ndarray
+    :param slave_geotrans: the geotransform information describing the
+            slave raster
+    :type slave_geotrans: list
+    :param master_raster: data grid serving as reference
+    :type master_raster: ndarray
+    :param master_geotrans: the geotransform information describing the
+            master raster
+    :type master_geotrans: list
+    :param interp_method: a gdal interpolation method:
+            https://gdal.org/java/org/gdal/gdalconst/gdalconstConstants.html
+    :type interp_method: str
+    :param epsg: Slave GDAL geometry object
+    :type epsg: osgeo.ogr.Geometry, optional
+    :pixel_spacing is the resolution of the master
+    :return: reinterpolated raster
+    :rtype: ndarray
+    """
+    xpixel_spacing=out_dataset.GetGeoTransform()[1]
+    ypixel_spacing=out_dataset.GetGeoTransform()[5]
+    osng = osr.SpatialReference ()
+    osng.ImportFromEPSG ( epsg_to )
+    wgs84 = osr.SpatialReference ()
+    wgs84.ImportFromEPSG (epsg_from )
+    tx = osr.CoordinateTransformation ( wgs84, osng )
+    # Up to here, all  the projection have been defined, as well as a 
+    # transformation from the from to the  to :)
+    # We now open the dataset
+    # Get the Geotransform vector
+    geo_t = in_dataset.GetGeoTransform ()
+    x_size = in_dataset.RasterXSize # Raster xsize
+    y_size = in_dataset.RasterYSize # Raster ysize
+    # Work out the boundaries of the new dataset in the target projection
+    (ulx, uly, ulz ) = tx.TransformPoint( geo_t[0], geo_t[3])
+    (lrx, lry, lrz ) = tx.TransformPoint( geo_t[0] + geo_t[1]*x_size, \
+                                          geo_t[3] + geo_t[5]*y_size )
+    # See how using 27700 and WGS84 introduces a z-value!
+    # Now, we create an in-memory raster
+    mem_drv = gdal.GetDriverByName( 'MEM' )
+    # The size of the raster is given the new projection and pixel spacing
+    # Using the values we calculated above. Also, setting it to store one band
+    # and to use Float32 data type.
+#    output = mem_drv.Create('', int((lrx - ulx)/pixel_spacing), \
+#            int((uly - lry)/pixel_spacing), 1, gdal.GDT_Float32)
+    output = mem_drv.Create('', out_dataset.RasterXSize, \
+        out_dataset.RasterYSize, 1, gdal.GDT_Float32)
+    # Calculate the new geotransform
+#    new_geo = ( ulx, xpixel_spacing, geo_t[2], \
+#                uly, geo_t[4], ypixel_spacing )
+    new_geo=out_dataset.GetGeoTransform ()
+    # Set the geotransform
+    output.SetGeoTransform( new_geo )
+    output.SetProjection ( osng.ExportToWkt() )
+
+    # Do the work depending on the interpolation method
+    if interp_method == "NearestNeighbor":
+        gdal.ReprojectImage( in_dataset, output, \
+            wgs84.ExportToWkt(), osng.ExportToWkt(), \
+            gdalconst.GRA_NearestNeighbour )
+
+    elif interp_method == "Bilinear":
+        gdal.ReprojectImage( in_dataset, output, \
+            wgs84.ExportToWkt(), osng.ExportToWkt(), \
+            gdalconst.GRA_Bilinear )
+
+    elif interp_method == "Average":
+        gdal.ReprojectImage( in_dataset, output, \
+            wgs84.ExportToWkt(), osng.ExportToWkt(), \
+            gdal.GRA_Average )
+
+    elif interp_method == "Cubic":
+        gdal.ReprojectImage( in_dataset, output, \
+            wgs84.ExportToWkt(), osng.ExportToWkt(), \
+            gdal.GRA_Cubic )
+    else:
+        raise ValueError("Interpolation method unknown!")
+
+    # Read the reinterpolated raster
+    outraster = output.GetRasterBand(1).ReadAsArray()
+
+    # Clean up
+    in_dataset = None
+    output = None
+
+    return outraster
 
 def resample_raster(slave_raster, slave_geotrans, master_raster,
                     master_geotrans, interp_method, epsg=2154):
@@ -205,8 +296,6 @@ def resample_raster(slave_raster, slave_geotrans, master_raster,
 
     # Set projection keeping the same one
     output.SetProjection(in_srs.ExportToWkt())
-    b = output.GetRasterBand(1)
-    b.SetNoDataValue(nan)
 
     # Do the work depending on the interpolation method
     if interp_method == "NearestNeighbor":
@@ -351,6 +440,70 @@ def write_xarray_dset(dataset, outpath, epsg, geotransform, ignore=[]):
             rasterband.WriteArray(dataset[array].compute().data)
             bandnum += 1
             rasterband = None
+
+    # Close the output image
+    raster = None
+    
+def write_xarray(array, outpath, epsg, geotransform, ignore=[]):
+    """Write an xarray to a geotiff.
+
+    Description goes here.
+
+    :param dataset:
+    :type dataset:
+    :param outpath:
+    :type outpath: str
+    :param epsg:
+    :type epsg: int
+    :param geotransform:
+    :type geotransform:
+    """
+    # Check if all arrays in dataset have the same dimensions
+    xsizes = []
+    ysizes = []
+
+    # Make a list of all x and y dimensions
+
+    xsizes.append(array.data.shape[0])
+    ysizes.append(array.data.shape[1])
+    # Check if all elements in the list are equal
+    if (not xsizes.count(xsizes[0]) == len(xsizes) or not
+            ysizes.count(ysizes[0]) == len(ysizes)):
+        raise ValueError("Arrays in Dataset aren't the same size!")
+
+    # Define output projection info:
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(epsg)
+    srs = srs.ExportToWkt()
+
+    # Create the output image:
+    driver = gdal.GetDriverByName('GTiff')
+    raster = driver.Create(outpath, ysizes[0], xsizes[0], 1,
+                           gdal.GDT_Float32)
+    raster.SetProjection(srs)
+    raster.SetGeoTransform(geotransform)
+
+    # Iterate over each band
+    bandnum = 1
+    # When gdal.GDT_Int16 NoDataValue is  -32768
+    # When Float32 NAn
+#    
+#    Unsigned 8 bit (uint8) with NoData as 255
+#    Signed 8 bit (int8) with NoData as -128
+#    Unsigned 16 bit (uint16) with NoData as 65535
+#    Signed 16 bit (int16) with NoData as -32768
+#    Unsigned 32 bit (uint32) with NoData as 2147483647
+#    Signed 32 bit (int32) with NoData as -2147483648
+#    Floating-point 32 bit (float32) with NoData as NaN (-3.402823466e+38)
+
+
+    rasterband = raster.GetRasterBand(bandnum)
+    if bandnum == 1:
+        rasterband.SetNoDataValue(nan)
+#    rasterband.SetDescription(array)
+    rasterband.WriteArray(array)
+    bandnum += 1
+    rasterband = None
 
     # Close the output image
     raster = None

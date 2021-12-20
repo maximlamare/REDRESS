@@ -7,8 +7,6 @@
 
 """
 
-import collections
-import six
 import numpy as np
 import math
 import scipy.optimize
@@ -17,17 +15,19 @@ import sys
 sys.path.append('/home/nheilir/REDRESS/snowoptics/')
 import snowoptics as so
 import xarray as xr
+from numba import jit
 
 
 # utility functions to write more condensed processing too.
 class AlgorithmError(Exception):
     pass
 
-
 def ssa_estimate(osmd, mask=None, model="2-param"):
     """estimate the SSA by fitting the spec to the model specified in parameter
 
-    :param spec: albedo spec
+    :param osmd: sat,dem,model object
+    :param mask: bands to masked, list
+    :param model; number of unknown 
     """
     def unpack_params(params):
         if model == "1-param":
@@ -43,7 +43,6 @@ def ssa_estimate(osmd, mask=None, model="2-param"):
         return a * (1 - b * (wls-400)/(1050-400)) * so.albedo_KZ04(wls * 1e-9,
                                                    sza, ssa, 
                                                    r_difftot=dirdiff_ratio, impurities=None, ni="p2016")
-
     def cost_difference(params, spec, dirdiff_ratio, sza, wls): 
         return spec - direct_model(params, wls, dirdiff_ratio, sza)
 
@@ -58,7 +57,7 @@ def ssa_estimate(osmd, mask=None, model="2-param"):
         first_guess = [1.0, 0.0, 40.]   
         params_guess=np.zeros((osmd.sat.shape[0],osmd.sat.shape[1],3))
     
-    dirdiff_ratio=np.array([b/(a+b) for a,b in zip(osmd.model.EdP,osmd.model.EhP)])
+    dirdiff_ratio=np.array([b/(a+b) for a,b in zip(osmd.model.EhP,osmd.model.EdP)])
     if mask==None :
         wls = np.array(osmd.sat.meta["wavelengths"])
         ddr = np.array(dirdiff_ratio)
@@ -105,44 +104,69 @@ def kokha_diff(lamb, ssa, ni=None, b=4.53):
     rho = 917.0
     return np.exp(- b * np.sqrt(24*np.pi*ni / (lamb*rho*ssa)))
 
-
 def mask_estimate(osmd):
-    osmd.model.snowmask["isSnow"]=xr.DataArray(np.where(((1./osmd.model.a*osmd.model.rmse)<0.3) & (osmd.model.a<4),1,np.nan),
-                                              dims=['y', 'x'],
-                                              coords=osmd.model.topo_bands.coords)
+        osmd.model.snowmask["isSnow"]=xr.DataArray(np.where(
+#                                                #de l'ombre
+                                                 ((osmd.sat.topo_bands["all_shadows"]<0.9) &
+                                                  (osmd.model.a > 0.5) 
+                                                )|
+##                                                #pas d'ombre
+                                                ( (osmd.sat.topo_bands["all_shadows"]>=0.9) &
+                                                  (osmd.model.a > 0.5) 
+                                                 ),1,0),
+                                                 dims=['y', 'x'],
+                                                 coords=osmd.model.topo_bands.coords)
+     
+        osmd.model.ssa=np.where(osmd.model.snowmask["isSnow"]==0,np.nan,osmd.model.ssa)
 
- 
-def refl_estimate(osmd):
-    
-    r_current_dividend = np.pi * (np.array(osmd.model.synthetic_toa_radiance) - np.array(osmd.model.LtNA) - np.array(osmd.model.LtA)[:,None,None])
-    
-    r_current_divisor = np.array(osmd.model.T_dir_up)  * (np.array(osmd.model.EdP)+ np.array(osmd.model.EhP))
-    d = np.array(osmd.model.EdP)/(np.array(osmd.model.EdP)+np.array(osmd.model.EhP))
-
-#    r_current_dividend = (osmd.model.EdP* osmd.model.albedo["direct"]) + (osmd.model.EhP * osmd.model.albedo["diffuse"])
+def refl_estimate(osmd,case=5):
 #    
-#    r_current_divisor =  (osmd.model.EdP + osmd.model.EhP)
-    osmd.model.r = np.divide(r_current_dividend, r_current_divisor,
-                              out=np.zeros_like(r_current_dividend),
-                              where=r_current_divisor != 0)-((1-d)*(np.array(osmd.model.hdr_view)-np.array(osmd.model.bhr))+
-                                                             (d*(np.array(osmd.model.brfnp)-np.array(osmd.model.hdr_sun))))
-
-        
-def obs(osmd):
-
-#    sat_bands=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
-#    for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
-#        sat_bands[index,:,:]= osmd.sat.bands[band].values
-
-    r_current_dividend = np.pi * (osmd.sat.sat_band_np - np.array(osmd.model.LtNA) - np.array(osmd.model.LtA)[:,None,None])
+    if (case==1):
+         osmd.model.r = obs_compiler(np.array(osmd.model.synthetic_toa_radiance),np.array(osmd.model.LtNA)[:,None,None],np.array(osmd.model.LtA)[:,None,None],
+                                    np.array(osmd.model.T_dir_up),np.array(osmd.model.EdP)[:,None,None],np.array(osmd.model.EhP)[:,None,None],
+                                    np.array(osmd.model.hdr_view),np.array(osmd.model.bhr),np.array(osmd.model.brfnp),
+                                     np.array(osmd.model.hdr_sun))
+    elif (case==2) : 
+        osmd.model.r = obs_compiler(np.array(osmd.model.synthetic_toa_radiance),np.array(osmd.model.LtNA)[:,None,None],np.array(osmd.model.LtA)[:,None,None],
+                                    np.array(osmd.model.T_dir_up),np.array(osmd.model.EdP),np.array(osmd.model.EhP),
+                                    np.array(osmd.model.hdr_view),np.array(osmd.model.bhr),np.array(osmd.model.brfnp),
+                                     np.array(osmd.model.hdr_sun))
+    else : 
+        osmd.model.r = obs_compiler(np.array(osmd.model.synthetic_toa_radiance),np.array(osmd.model.LtNA),np.array(osmd.model.LtA)[:,None,None],
+                                    np.array(osmd.model.T_dir_up),np.array(osmd.model.EdP),np.array(osmd.model.EhP),
+                                    np.array(osmd.model.hdr_view),np.array(osmd.model.bhr),np.array(osmd.model.brfnp),
+                                     np.array(osmd.model.hdr_sun))
     
-    r_current_divisor = np.array(osmd.model.T_dir_up) * (np.array(osmd.model.EdP) + np.array(osmd.model.EhP))
-    
-    d = np.array(osmd.model.EdP)/(np.array(osmd.model.EdP)+np.array(osmd.model.EhP))
-    
-    osmd.model.rtild = np.divide(r_current_dividend, r_current_divisor,
-                              out=np.zeros_like(r_current_dividend),
-                              where=r_current_divisor != 0) -((1-d)*(np.array(osmd.model.hdr_view)-np.array(osmd.model.bhr))+
-                                                             (d*(np.array(osmd.model.brfnp)-np.array(osmd.model.hdr_sun))))
+def obs(osmd,case=5):
+    if (case==1):
+        osmd.model.rtild = obs_compiler(osmd.sat.sat_band_np,np.array(osmd.model.LtNA)[:,None,None],np.array(osmd.model.LtA)[:,None,None],
+                                    np.array(osmd.model.T_dir_up),np.array(osmd.model.EdP)[:,None,None],np.array(osmd.model.EhP)[:,None,None],
+                                    np.array(osmd.model.hdr_view),np.array(osmd.model.bhr),np.array(osmd.model.brfnp),
+                                     np.array(osmd.model.hdr_sun))
+        osmd.model.r_current_divisor = np.array(osmd.model.T_dir_up) * (np.array(osmd.model.EdP)[:,None,None]+ np.array(osmd.model.EhP)[:,None,None])
+    elif(case==2) : 
+        osmd.model.rtild = obs_compiler(osmd.sat.sat_band_np,np.array(osmd.model.LtNA)[:,None,None],np.array(osmd.model.LtA)[:,None,None],
+                                    np.array(osmd.model.T_dir_up),np.array(osmd.model.EdP),np.array(osmd.model.EhP),
+                                    np.array(osmd.model.hdr_view),np.array(osmd.model.bhr),np.array(osmd.model.brfnp),
+                                     np.array(osmd.model.hdr_sun))
+    else : 
+        osmd.model.rtild = obs_compiler(osmd.sat.sat_band_np,np.array(osmd.model.LtNA),np.array(osmd.model.LtA)[:,None,None],
+                                    np.array(osmd.model.T_dir_up),np.array(osmd.model.EdP),np.array(osmd.model.EhP),
+                                    np.array(osmd.model.hdr_view),np.array(osmd.model.bhr),np.array(osmd.model.brfnp),
+                                     np.array(osmd.model.hdr_sun))
+    osmd.model.r_current_divisor = np.array(osmd.model.T_dir_up) * (np.array(osmd.model.EdP)+ np.array(osmd.model.EhP))
 
-        
+#        
+@jit(nopython=True)
+def obs_compiler(sat_band_np,LtNA,LtA,T_dir_up,EdP,EhP,hdr_view,bhr,brfnp,hdr_sun): 
+    r_current_dividend = np.pi * (sat_band_np - LtNA - LtA)
+    
+    r_current_divisor = T_dir_up * (EdP + EhP)
+    
+    
+    d = EdP/(EdP+EhP)
+                                                                
+    r=np.zeros_like(r_current_dividend)
+    r = np.divide(r_current_dividend, r_current_divisor)-((1-d)*(hdr_view - bhr)+(d*(brfnp-hdr_sun)))
+    return r
+#

@@ -99,7 +99,7 @@ def open_subset(product, geo_extent, copymetadata="true"):
    
 
 
-def resample(product, geo_extent, epsg, copymetadata="true"):
+def resample(product, geo_extent, epsg, res, copymetadata="true"):
     """ Get the corner coordinates from the opened satellite image.
 
     Fetches a list of latitude and longitude values for the boundary
@@ -109,6 +109,7 @@ def resample(product, geo_extent, epsg, copymetadata="true"):
     Args:
         (self.product): The snappy product opened using snappy.
         step (int): the step size in pixels
+        res : float, resolution of the product
 
     Returns:
             (list): a list containing the boundary coordinates."""
@@ -122,8 +123,8 @@ def resample(product, geo_extent, epsg, copymetadata="true"):
     parameters.put("resampling", "Bilinear")
     parameters.put("noDataValue", "-9999")
     parameters.put("orthorectify", "false")
-    parameters.put("pixelSizeX", 300.0)
-    parameters.put("pixelSizeY", 300.0)
+    parameters.put("pixelSizeX", res)
+    parameters.put("pixelSizeY", res)
 
     # Check if the image rasters are all the same size, if not, offer to
     # resample
@@ -285,7 +286,7 @@ def sentinel3_olci(inpath, extent, epsg, user_list=[], resolution=300,):
             raise ValueError("Selected bands are not in product!")
 
     # Resample dataset
-    s3_resampled = resample(s3_prod, extent, epsg,)
+    s3_resampled = resample(s3_prod, extent, epsg, res=300.)
 
     # Instantiate class
     s3_data = Sat()

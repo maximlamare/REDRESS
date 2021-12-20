@@ -8,6 +8,7 @@ M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 import importlib
 import xarray as xr
 from redress.geospatial import gdal_ops
+from osgeo import gdal
 
 
 def import_reader(reader):
@@ -65,3 +66,33 @@ def import_s3OLCI(inpath, extent, epsg=2154, reader=None, user_list=[]):
                                         user_list=user_list)
 
     return s3_prod
+
+
+def import_s2MSI_SAFE(inpath, extent, epsg=2154, reader=None, user_list=[]):
+    """Import Sentinel-3 image.
+
+    Import a Sentinel-2 SAFE image from the product folder.
+    The function populates a class with the necessary information to run the
+     model. The reader argument specifies the libraries used to read the
+     images and can be swapped out by your own methods.
+
+    Args:
+        inpath (str): Path to a S3 OLCI image xfdumanisfest.xml file
+        extent (osgeo.ogr.Geometry): GDAL geometry object specifying the extent
+            to be extracted from the image
+        reader (str): specify the reader to be used to deal with the image
+
+    Returns:
+        (obj): Sentinel-2 image class
+    """
+    # Try to import reader library
+    if isinstance(reader, str):
+        sat_reader = import_reader(reader)
+    else:
+        raise ValueError("Please specify a valid satellite reader.")
+
+    # Open the image with the reader and import data to a class
+    s2_prod = sat_reader.sentinel2_msi_safe(inpath, extent, epsg,
+                                        user_list=user_list)
+
+    return s2_prod

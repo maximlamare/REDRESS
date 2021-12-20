@@ -18,7 +18,7 @@ from redress.inputs.geotiffs import import_DEM_gtiff
 from redress.geospatial.gdal_ops import (build_poly_from_geojson,
                                                 resample_dataset,
                                                 write_xarray_dset)
-from redress.inputs.satellites import import_s3OLCI
+from redress.inputs.satellites import import_s3OLCI,import_s2MSI_SAFE
 
 class Sat(object):
     """ Satellite image class
@@ -31,7 +31,7 @@ class Sat(object):
         
         self.date = " "
         self.meta = {"path": None, "bandlist": [], "angles": [],
-                     "wavelengths": []}
+                     "wavelengths": [] ,"solar_irradiance": [], "gains": [] }
         self.bands = xr.Dataset()
         self.altitude = xr.Dataset()
         self.geotransform = None
@@ -220,6 +220,7 @@ class Model(object):
         self.T_dir_up=[]
         self.view_ground=[]
         self.rtild = []
+        self.r_current_divisor = []
         self.r = []
         self.a = []
         self.rmse = []
@@ -288,7 +289,6 @@ class Model(object):
             diffuse_total_ratio = 1 / (1 + dir_illum / diff_illum)
 
             self.difftot.append(diffuse_total_ratio)
-
             # Compute albedo
             alb_dir_sun, alb_dir_view, alb_diff, alb_tot = albedo_kokhanovsky(
                 wvl,
@@ -320,8 +320,9 @@ class Model(object):
                                       self.topo_bands["eff_raa"],
                                       wvl, self.ssa,)))    
 #####################END FIXBUG FRANCOIS
-    def simulate_TOA_radiance(self, casenum, osmd):
+    def simulate_TOA_radiance(self, osmd, casenum=5):
 
+        self.albedo = {"total": [], "direct_sun": [], "direct_view": [], "diffuse": []}
         # Compute albedo
         self.compute_albedo()
 
@@ -338,6 +339,10 @@ class Model(object):
         self.LtA =[]
         self.T_dir_up=[]
         self.view_ground=[]
+        self.hdr_sun=[]
+        self.hdr_view=[]
+        self.bhr=[]
+        self.brfnp=[]
         for band, wvl, hdr_sun,  hdr_view, bhr, brf in zip(self.meta["bandlist"],
                                             self.meta["wavelengths"],
                                             self.albedo["direct_sun"],
@@ -377,6 +382,7 @@ class Model(object):
             self.hdr_view.append(hdr_view)
             self.bhr.append(bhr)
             self.brfnp.append(brf[1].data)
+
             
             
         
@@ -392,26 +398,39 @@ class SMD (object):
         self.dem = None
         self.model = None
                         
-    def init_DEM(self, outfolder,infolder, strdem, strpoly ,strdemread):
+    def init_DEM(self, outfolder,infolder, strdem ,strdemread, strpoly=None):
         """ initialise the objet dem in  SMD """
         
         # DEM path
         dem_path = Path(infolder+strdem)
         
-        # Provide a geojson file and build polygon
-        bbox_json = Path(infolder+strpoly)
-        geo_extent = build_poly_from_geojson(str(bbox_json))
+        if strpoly!=None:
+            # Provide a geojson file and build polygon
+            bbox_json = Path(infolder+strpoly)
+            geo_extent = build_poly_from_geojson(str(bbox_json))
+            # import data
+            self.dem = import_DEM_gtiff(dem_path, geo_extent, epsg=2154, reader=strdemread)
+            write_xarray_dset(self.dem.bands, outfolder+strdem, 2154, self.dem.geotransform, ignore=[])            
+            self.dem.geo_extent=geo_extent # AVOIR
+        else:
+           # import data
+            self.dem = import_DEM_gtiff(dem_path, None, epsg=2154, reader=strdemread)
+            write_xarray_dset(self.dem.bands, outfolder+strdem, 2154, self.dem.geotransform, ignore=[])
         
-        # import data
-        self.dem = import_DEM_gtiff(dem_path, geo_extent, epsg=2154, reader=strdemread)
-        write_xarray_dset(self.dem.bands, outfolder+strdem, 2154, self.dem.geotransform, ignore=[])
-        
-        self.dem.geo_extent=geo_extent # AVOIR
-        
-    def init_SAT(self, outfolder,infolder, date, strsat,strsatread):
+    def init_SAT(self, outfolder,infolder, date, strsat,strsatread,sattype="sat3",demname=" "):
         """ initialise the objet sat in  SMD """
         s3_path = Path(strsat)
-        self.sat = import_s3OLCI(s3_path, self.dem.geo_extent, epsg=2154, reader=strsatread)
+        if sattype=="sat3":
+            self.sat = import_s3OLCI(s3_path, self.dem.geo_extent, epsg=2154, reader=strsatread)
+        elif sattype=="sat2":
+            self.sat = import_s2MSI_SAFE(s3_path, self.dem.geo_extent, epsg=2154, reader=strsatread,
+                                         user_list=[#"B01", "B09", "B10",  #60 metre
+                                                    "B02","B03","B04","B05","B06","B07","B08",  #10 metre
+                                                    "B8A","B11","B12",  #20 metre
+                                                    "satellite_azimuth_angle","satellite_zenith_angle", "solar_azimuth_angle","solar_zenith_angle", ])
+        else:
+            raise ValueError("The chosen Sattelite type is not supported")
+        
         self.sat.date = date 
         if os.path.exists(outfolder+"%s/sen.tif"):
             os.remove(outfolder+"%s/sen.tif")
@@ -422,45 +441,50 @@ class SMD (object):
         resample_dataset(self.sat.angles, self.sat.geotransform, self.dem.angles, self.dem.geotransform,
                          self.dem.bands["altitude"], "NearestNeighbor")
     
-        write_xarray_dset(self.dem.angles, outfolder+"%s/dem2.tif" %date, 2154, self.dem.geotransform, ignore=[])
+        write_xarray_dset(self.dem.angles, outfolder+"%s/dem_angles.tif" %date, 2154, self.dem.geotransform, ignore=[])
+        
         self.sat.shape=(self.sat.bands.sizes["y"],self.sat.bands.sizes["x"])
         #################
+        horizon_file=infolder+"horizons_compute_"+sattype+demname+".nc"
         # EITHER
-        # Open horizon file
-        saved_horizon = xr.open_dataset(infolder+"horizons_compute.nc")
-        # Update the dem product
-        self.dem.bands.update(saved_horizon)
-        #################
-#        # OR
-#        # Calulate the horizon
-#        self.dem.compute_horizon()
-#        
-#        # To save the horizon arrays (elevation and distance), merge them to 1 Dataset
-#        horizons = xr.merge([self.dem.bands["horizon_ele"], self.dem.bands["horizon_dist"]])
-#        #print(horizons)
-#        
-#        # Save horizon file to a netcdf
-##        hor_file = Path("/home/lamarem/Documents/REDRESS/outputs/horizons.nc")
-#        hor_file =infolder+"horizons_compute.nc"
-#        horizons.to_netcdf(hor_file)
-#        
-#        self.dem.bands.update(horizons)
-#        
-#        # Close the dataset to free memory
-#        horizons = None
+        if os.path.exists(horizon_file):
+            # Open horizon file
+            saved_horizon = xr.open_dataset(horizon_file)
+            # Update the dem product
+            self.dem.bands.update(saved_horizon)
+        else:            
+            # Calulate the horizon
+            print("compute horizon")
+            self.dem.compute_horizon()
+            print("end compute horizon")
+            # To save the horizon arrays (elevation and distance), merge them to 1 Dataset
+            horizons = xr.merge([self.dem.bands["horizon_ele"], self.dem.bands["horizon_dist"]])
+            #print(horizons)
+                        # Save horizon file to a netcdf
+            horizons.to_netcdf(horizon_file)
+            self.dem.bands.update(horizons)
+            # Close the dataset to free memory
+            horizons = None
         ##################
         
         # Compute other topobands
         self.dem.compute_topo_bands()
         
         write_xarray_dset(self.dem.bands,outfolder+"dem_topo.tif", 2154, self.dem.geotransform, ignore=["horizon_ele", "horizon_dist"])
-    
+
         # Resample to satellite
-        resample_dataset(self.dem.bands, self.dem.geotransform, self.sat.topo_bands,
+        if sattype=="sat3":
+            resample_dataset(self.dem.bands, self.dem.geotransform, self.sat.topo_bands,
                          self.sat.geotransform, self.sat.bands["Oa01"],
                          "Average",
                          epsg=2154, exclude=["horizon_ele", "horizon_dist"],
                          add_padding=True)
+        elif sattype=="sat2":
+            resample_dataset(self.dem.bands, self.dem.geotransform, self.sat.topo_bands,
+                         self.sat.geotransform, self.sat.bands["B05"],
+                         "Average",
+                         epsg=2154, exclude=["horizon_ele", "horizon_dist"],
+                         add_padding=True)        
     
     
         write_xarray_dset(self.sat.topo_bands, outfolder+"%s/topobands.tiff"% date, 2154, self.sat.geotransform, ignore=[])

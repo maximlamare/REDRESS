@@ -6,7 +6,7 @@ gdal_reader.
 This file is part of the complex_terrain algorithm
 M. Lamare, M. Dumont, G. Picard (IGE, CEN).
 """
-import gdal
+from osgeo import gdal
 import xarray as xr
 import numpy as np
 from pyproj import Proj, transform
@@ -162,34 +162,53 @@ def extract_band(product, geotransform):
 
 def dem_generic(inpath, extent, epsg,):
     """doc."""
-    # Instantiate DEM class
-    dem = Dem()
+    if extent!=None:
+        # Instantiate DEM class
+        dem = Dem()
+    
+        # Feed the class with data
+        dem.meta["path"] = inpath
+    
+        # Open the image using the imported reader
+        raw_product, raw_geotrans = open_product(inpath)
+    
+        # Check if the product overlaps the extent of the file
+        dem_extents = gdal_ops.build_poly_from_coords(image_extents(raw_product,
+                                                                    raw_geotrans,
+                                                                    epsg))
+        if not gdal_ops.geom_contains(dem_extents, extent):
+            raise ValueError("The chosen bounding box is not entirely inside the"
+                             " provided DEM!")
+    
+        # Reproject the DEM to the desire dprojection
+        reprojected_product, reprojected_geotrans = reproject(raw_product, 2154)
+    
+        # Subset the DEM to an area of interest
+        clipped_product, clipped_geotrans = clip(reprojected_product, extent,
+                                                 epsg=2154)
+    
+        # Import the band and geotransform
+        dem.bands["altitude"] = extract_band(clipped_product, clipped_geotrans)
+        dem.geotransform = clipped_geotrans
+        dem.pixel_size = (clipped_geotrans[1], clipped_geotrans[-1])
+    else: 
+        # Instantiate DEM class
+        dem = Dem()
+    
+        # Feed the class with data
+        dem.meta["path"] = inpath
+        
+        raw_product, raw_geotrans = open_product(inpath)
+         # Reproject the DEM to the desire dprojection
+        reprojected_product,  dem.geotransform = reproject(raw_product, 2154)
+        
 
-    # Feed the class with data
-    dem.meta["path"] = inpath
-
-    # Open the image using the imported reader
-    raw_product, raw_geotrans = open_product(inpath)
-
-    # Check if the product overlaps the extent of the file
-    dem_extents = gdal_ops.build_poly_from_coords(image_extents(raw_product,
-                                                                raw_geotrans,
-                                                                epsg))
-
-    if not gdal_ops.geom_contains(dem_extents, extent):
-        raise ValueError("The chosen bounding box is not entirely inside the"
-                         " provided DEM!")
-
-    # Reproject the DEM to the desire dprojection
-    reprojected_product, reprojected_geotrans = reproject(raw_product, 2154)
-
-    # Subset the DEM to an area of interest
-    clipped_product, clipped_geotrans = clip(reprojected_product, extent,
-                                             epsg=2154)
-
-    # Import the band and geotransform
-    dem.bands["altitude"] = extract_band(clipped_product, clipped_geotrans)
-    dem.geotransform = clipped_geotrans
-    dem.pixel_size = (clipped_geotrans[1], clipped_geotrans[-1])
+        # Import the band and geotransform
+        dem.bands["altitude"] = extract_band(reprojected_product, dem.geotransform)
+        dem.pixel_size = (dem.geotransform[1], dem.geotransform[-1])
+         # Check if the product overlaps the extent of the file
+        dem.geo_extent = gdal_ops.build_poly_from_coords(image_extents(raw_product,
+                                                                    raw_geotrans,
+                                                                    epsg))
 
     return dem
