@@ -164,7 +164,7 @@ for i in range(1):
                               )
 
     osmd.sat.sat_band_np=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
-    temprefl=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
+
     if (Sattype=="sat2"):
         def calcul_dt(date):
             import jdcal
@@ -172,6 +172,7 @@ for i in range(1):
             return dt
         dt=calcul_dt(date)
 #         rho_kE_sd(t)*cos(theta_s)/pi
+        temprefl=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
         for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
             temprefl[index,:,:]= osmd.sat.bands[band].values
             osmd.sat.bands[band].values    = ((osmd.sat.bands[band].values/100.)*osmd.sat.meta["solar_irradiance"][band]*dt*np.cos(osmd.sat.angles["SZA"]).values)/np.pi   

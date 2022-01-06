@@ -85,9 +85,27 @@ osmd.model.set_rt_options("Urban", aod=measure_value[osmd.sat.date]['aod'],
                           ozone=measure_value[osmd.sat.date]['ozone'],
                           water= measure_value[osmd.sat.date]['water']
                           )
+#I just create sat_band_np to have an numpy array because dataset is not perform. I believe that a better way have to be do.
 osmd.sat.sat_band_np=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
-for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
-    osmd.sat.sat_band_np[index,:,:]= osmd.sat.bands[band].values    
+if (Sattype=="sat2"):
+    
+    def calcul_dt(date):
+        import jdcal
+        dt=1./np.power((1-0.01673*np.cos(0.0172*(sum(jdcal.gcal2jd(date[0:4], date[4:6], date[6:9]))-2))), 2)
+        return dt
+    dt=calcul_dt(date)
+#   In Sentinel2 product we also have to convert refectance to radiance 
+    temprefl=np.zeros((len(osmd.model.meta["wavelengths"]),osmd.sat.shape[0],osmd.sat.shape[1]))
+    for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
+        temprefl[index,:,:]= osmd.sat.bands[band].values
+        osmd.sat.bands[band].values    = ((osmd.sat.bands[band].values/100.)*osmd.sat.meta["solar_irradiance"][band]*dt*np.cos(osmd.sat.angles["SZA"]).values)/np.pi   
+        osmd.sat.sat_band_np[index,:,:]= osmd.sat.bands[band].values            
+   
+elif Sattype=="sat3":
+    for band,index in zip(osmd.model.meta["bandlist"],range(len(osmd.model.meta["wavelengths"]))):
+        osmd.sat.sat_band_np[index,:,:]= osmd.sat.bands[band].values
+
+
 
 # iteration to estimate snow mask and ssa (threshold to be defined )
 for iterOptim in range(1,2):
