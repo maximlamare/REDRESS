@@ -7,15 +7,22 @@ The monitoring of snow-covered surfaces on Earth is largely facilitated by the w
 
 ---
 **Install :**
+
 install conda then :
+
 conda config --set auto_activate_base false
+
 conda config --add channels conda-forge
+
 conda config --set channel_priority strict
-conda env create -f package_list.ymlcp
+
+conda env create -f package_list.yml
+
 conda activate Redress
 
 
 **Run**
+
 All informations in "script_lancement.py"
 
 
